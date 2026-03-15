@@ -195,7 +195,11 @@ function getFirstMessage(character) {
 
 function getPersonality(character) {
     return normalizeString(
-        character?.data?.personality
+        character?.data?.description
+        ?? character?.description
+        ?? character?.desc
+        ?? character?.data?.desc
+        ?? character?.data?.personality
         ?? character?.personality
         ?? character?.char_persona
         ?? character?.data?.char_persona
@@ -730,7 +734,15 @@ function applyInlineFormatting(value, { enableMessageFormatting = false, highlig
     }
 
     if (highlightQuotes) {
-        formatted = formatted.replace(/&quot;([\s\S]+?)&quot;/g, '<span class="acl-quote">&quot;$1&quot;</span>');
+        formatted = formatted
+            .replace(/\u201C/g, '&#8220;')
+            .replace(/\u201D/g, '&#8221;');
+        formatted = formatted
+            .replace(/&quot;([\s\S]+?)&quot;/g, '<span class="acl-quote">&quot;$1&quot;</span>')
+            .replace(/“([\s\S]+?)”/g, '<span class="acl-quote">“$1”</span>')
+            .replace(/&#8220;([\s\S]+?)&#8221;/g, '<span class="acl-quote">&#8220;$1&#8221;</span>')
+            .replace(/[“”]([\s\S]+?)[“”]/g, '<span class="acl-quote">$&</span>')
+            .replace(/(?:&#8220;|&#8221;)([\s\S]+?)(?:&#8220;|&#8221;)/g, '<span class="acl-quote">$&</span>');
     }
 
     return formatted;
@@ -871,8 +883,8 @@ function renderModal(character) {
                             </div>
                             <div class="acl-modal-details">
                                 ${renderCollapsibleSection('Description', descriptionHtml, 'No creator notes yet.', 'acl-modal-copy-section')}
-                                ${renderCollapsibleSection('Personality', personalityHtml, 'No personality set.', 'acl-modal-copy-section')}
                                 ${renderCollapsibleSection('First message', firstMessageHtml, 'No first message found.', 'acl-modal-copy-section')}
+                                ${renderCollapsibleSection('Personality', personalityHtml, 'No personality set.', 'acl-modal-copy-section')}
                             </div>
                         </div>
                     ` : `
@@ -1296,7 +1308,6 @@ async function onRootSubmit(event) {
 
     if (form.dataset.submitAction === 'save-edit') {
         event.preventDefault();
-        console.info(`[${EXTENSION_NAME}] Save submit captured`);
         await saveEditForm(form);
         return;
     }
@@ -1343,25 +1354,65 @@ async function openCharacterChat(character) {
 
 async function openNativeCharacterEditor(character) {
     const context = getContextSafe();
-    const selectCharacterMethods = [
-        typeof context?.selectCharacterById === 'function' ? () => context.selectCharacterById(character.index) : null,
-        typeof context?.setCharacterId === 'function' ? () => context.setCharacterId(character.index) : null,
-        typeof globalThis.selectCharacterById === 'function' ? () => globalThis.selectCharacterById(character.index) : null,
-    ].filter(Boolean);
+    const waitForUi = (delay = 80) => new Promise((resolve) => window.setTimeout(resolve, delay));
+    const characterIndex = Number.isInteger(character?.index) ? String(character.index) : '';
 
-    for (const invoke of selectCharacterMethods) {
-        try {
-            await invoke?.();
-            break;
-        } catch (error) {
-            log('Native character select attempt failed', error);
+    const navOpenSelectors = [
+        '#rightNavDrawerIcon',
+        '#rm_button_characters',
+        '[data-action="open-character-list"]',
+        '[data-action="characters"]',
+    ];
+
+    const isRightNavOpen = () => {
+        const panel = document.getElementById('right-nav-panel');
+        if (!(panel instanceof HTMLElement)) {
+            return false;
+        }
+        return !panel.classList.contains('closedDrawer') || panel.classList.contains('openDrawer');
+    };
+
+    if (!isRightNavOpen()) {
+        for (const selector of navOpenSelectors) {
+            const button = document.querySelector(selector);
+            if (button instanceof HTMLElement) {
+                button.click();
+                await waitForUi(120);
+                if (isRightNavOpen()) {
+                    break;
+                }
+            }
         }
     }
 
+    try {
+        if (typeof context?.selectCharacterById === 'function') {
+            await context.selectCharacterById(character.index);
+        } else if (typeof globalThis.selectCharacterById === 'function') {
+            await globalThis.selectCharacterById(character.index);
+        } else if (typeof context?.setCharacterId === 'function') {
+            await context.setCharacterId(character.index);
+            const selectedButton = document.getElementById('rm_button_selected_ch');
+            if (selectedButton instanceof HTMLElement) {
+                selectedButton.click();
+            }
+        } else if ('this_chid' in globalThis && characterIndex) {
+            globalThis.this_chid = characterIndex;
+            const selectedButton = document.getElementById('rm_button_selected_ch');
+            if (selectedButton instanceof HTMLElement) {
+                selectedButton.click();
+            }
+        }
+        await waitForUi(180);
+    } catch (error) {
+        log('Native character manager selection failed', error);
+    }
+
     const editSelectors = [
-        '#rm_button_selected_ch',
         '#character_edit_button',
+        '#rm_button_selected_ch',
         '[data-action="character_edit"]',
+        '[data-action="edit-character"]',
         '.open_character_popup',
     ];
 
@@ -1373,6 +1424,12 @@ async function openNativeCharacterEditor(character) {
             scheduleRender();
             return;
         }
+    }
+
+    if (document.getElementById('right-nav-panel') instanceof HTMLElement && isRightNavOpen()) {
+        state.selectedCharacterKey = null;
+        scheduleRender();
+        return;
     }
 
     notifyError('Could not find SillyTavern\'s native character editor button in this build.', 'Open in ST failed');
@@ -1589,7 +1646,6 @@ async function saveEditForm(form) {
     }
 
     try {
-        console.info(`[${EXTENSION_NAME}] Starting save for ${character.name}`);
         const fullCharacter = await fetchFullCharacter(character, context);
         if (!fullCharacter) {
             notifyError('Could not load the full character card before saving.', 'Save failed');
@@ -1605,14 +1661,14 @@ async function saveEditForm(form) {
                 avatar,
                 creatorcomment: override.description,
                 first_mes: override.firstMessage,
-                personality: override.personality,
+                description: override.personality,
                 creator: override.creator,
                 character_version: override.version,
                 tags: tagNames,
                 data: {
                     creator_notes: override.description,
                     first_mes: override.firstMessage,
-                    personality: override.personality,
+                    description: override.personality,
                     creator: override.creator,
                     character_version: override.version,
                     tags: tagNames,
@@ -1627,7 +1683,6 @@ async function saveEditForm(form) {
             return;
         }
 
-        console.info(`[${EXTENSION_NAME}] Save succeeded for ${character.name}`);
         settings.overrides[characterKey] = override;
         settings.creatorLinks[characterKey] = override.creatorLink;
         upsertBuiltInTags(characterKey, tagNames);
@@ -1641,7 +1696,7 @@ async function saveEditForm(form) {
         scheduleRender();
         notifySuccess(`${character.name} was updated.`, 'Character saved');
     } catch (error) {
-        console.error(`[${EXTENSION_NAME}] Save failed`, error);
+        log('Save failed', error);
         notifyError(normalizeString(error?.message) || 'Request failed while saving the character.', 'Save failed');
     }
 }
