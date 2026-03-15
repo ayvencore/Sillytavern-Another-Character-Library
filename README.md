@@ -35,7 +35,7 @@ A SillyTavern extension that replaces the default landing page with a rich chara
 Install it through SillyTavern's built-in extension installer from the repository URL:
 
 ```text
-https://github.com/your-name/your-repo
+https://github.com/ayvencore/Sillytavern-Another-Character-Library
 ```
 
 ## Notes
