@@ -47,6 +47,8 @@ let state = {
     openMenuKey: null,
     searchDraft: '',
     topInset: 48,
+    tokenCounts: {},
+    tokenCountPending: new Set(),
 };
 
 const nativeLandingShellSelector = '#sheld';
@@ -219,6 +221,29 @@ function getAvatarUrl(character, context) {
     return rawAvatar;
 }
 
+function getCharacterTokenSource(character) {
+    const raw = character?.raw ?? character ?? {};
+    const parts = [
+        normalizeString(raw?.description),
+        normalizeString(raw?.personality),
+        normalizeString(raw?.scenario),
+        normalizeString(raw?.first_mes),
+        normalizeString(raw?.mes_example),
+        normalizeString(raw?.data?.description),
+        normalizeString(raw?.data?.personality),
+        normalizeString(raw?.data?.scenario),
+        normalizeString(raw?.data?.first_mes),
+        normalizeString(raw?.data?.mes_example),
+        normalizeString(raw?.data?.creator_notes),
+        normalizeString(raw?.creatorcomment),
+        normalizeString(raw?.data?.system_prompt),
+        normalizeString(raw?.data?.post_history_instructions),
+        ...(Array.isArray(raw?.data?.alternate_greetings) ? raw.data.alternate_greetings.map(normalizeString) : []),
+    ].filter(Boolean);
+
+    return parts.join('\n\n');
+}
+
 function readOverride(characterKey) {
     return settings.overrides?.[characterKey] ?? {};
 }
@@ -271,6 +296,7 @@ function normalizeCharacters(context) {
             personality,
             avatar: getAvatarUrl(character, context),
             tags,
+            tokenCount: Number(state.tokenCounts?.[key]) || 0,
             favorite: Boolean(settings.favorites?.[key] ?? character?.data?.extensions?.fav ?? character?.fav),
             creatorLink: normalizeString(override.creatorLink ?? getCreatorLink(key, character)),
             addedAt: Math.max(
@@ -508,6 +534,34 @@ function renderPagination(totalPages) {
     `;
 }
 
+function queueVisibleTokenCounts(characters, context = getContextSafe()) {
+    const tokenizer = context?.getTokenCountAsync;
+    if (typeof tokenizer !== 'function') {
+        return;
+    }
+
+    for (const character of characters) {
+        const tokenSource = getCharacterTokenSource(character);
+        if (!tokenSource || state.tokenCounts[character.key] || state.tokenCountPending.has(character.key)) {
+            continue;
+        }
+
+        state.tokenCountPending.add(character.key);
+        Promise.resolve(tokenizer(tokenSource, 0))
+            .then((count) => {
+                const nextCount = Number(count);
+                state.tokenCounts[character.key] = Number.isFinite(nextCount) ? nextCount : 0;
+            })
+            .catch((error) => {
+                log('Token count calculation failed', error);
+            })
+            .finally(() => {
+                state.tokenCountPending.delete(character.key);
+                scheduleRender();
+            });
+    }
+}
+
 function render() {
     const context = getContextSafe();
     ensureSettings(context);
@@ -529,6 +583,7 @@ function render() {
 
     const selectedCharacter = getSelectedCharacter();
     const { items, totalPages, totalCharacters } = getPagedCharacters(state.filteredCharacters);
+    queueVisibleTokenCounts(items, context);
 
     root.innerHTML = `
         <div class="acl-backdrop"></div>
@@ -638,6 +693,7 @@ function renderCard(character) {
                             ${hiddenTagCount ? `<span class="acl-tag acl-tag--muted">+${hiddenTagCount}</span>` : ''}
                         </div>
                     ` : ''}
+                    <p class="acl-card-token-count">${character.tokenCount ? `${character.tokenCount} tokens` : 'Counting...'}</p>
                 </div>
             </button>
         </article>
@@ -882,15 +938,15 @@ function renderModal(character) {
                                 </section>
                             </div>
                             <div class="acl-modal-details">
-                                ${renderCollapsibleSection('Description', descriptionHtml, 'No creator notes yet.', 'acl-modal-copy-section')}
+                                ${renderCollapsibleSection('Creator\'s Notes', descriptionHtml, 'No creator notes yet.', 'acl-modal-copy-section')}
                                 ${renderCollapsibleSection('First message', firstMessageHtml, 'No first message found.', 'acl-modal-copy-section')}
-                                ${renderCollapsibleSection('Personality', personalityHtml, 'No personality set.', 'acl-modal-copy-section')}
+                                ${renderCollapsibleSection('Description', personalityHtml, 'No description set.', 'acl-modal-copy-section')}
                             </div>
                         </div>
                     ` : `
                         <form class="acl-edit-form" data-submit-action="save-edit" data-character-key="${escapeHtml(character.key)}" autocomplete="off">
                             <label>
-                                <span>Description / Creator's Notes</span>
+                                <span>Creator's Notes</span>
                                 <textarea name="description" rows="4">${escapeHtml(character.description)}</textarea>
                             </label>
                             <label>
@@ -910,7 +966,7 @@ function renderModal(character) {
                                 <textarea name="firstMessage" rows="4">${escapeHtml(character.firstMessage)}</textarea>
                             </label>
                             <label>
-                                <span>Personality</span>
+                                <span>Description</span>
                                 <textarea name="personality" rows="4">${escapeHtml(character.personality)}</textarea>
                             </label>
                             ${renderEditTagEditor(character)}
@@ -1547,6 +1603,8 @@ function removeCharacterFromLocalState(character, context) {
     delete settings.favorites[character.key];
     delete settings.creatorLinks[character.key];
     delete settings.overrides[character.key];
+    delete state.tokenCounts[character.key];
+    state.tokenCountPending.delete(character.key);
 }
 
 async function deleteCharacter(character) {
@@ -1685,6 +1743,8 @@ async function saveEditForm(form) {
 
         settings.overrides[characterKey] = override;
         settings.creatorLinks[characterKey] = override.creatorLink;
+        delete state.tokenCounts[characterKey];
+        state.tokenCountPending.delete(characterKey);
         upsertBuiltInTags(characterKey, tagNames);
         await persistSettings(context);
 

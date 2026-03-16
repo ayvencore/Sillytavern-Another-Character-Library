@@ -271,6 +271,8 @@
 
 .acl-card {
     position: relative;
+    display: flex;
+    flex-direction: column;
     border-radius: 18px;
     overflow: hidden;
     background:
@@ -293,6 +295,10 @@
 .acl-card-button--image,
 .acl-card-button--body {
     display: block;
+}
+
+.acl-card-button--body {
+    flex: 1 1 auto;
 }
 
 .acl-card-image-wrap {
@@ -399,8 +405,10 @@
 }
 
 .acl-card-body {
-    display: grid;
+    display: flex;
+    flex-direction: column;
     gap: 0.36rem;
+    height: 100%;
     padding: 0.68rem 0.82rem 0.82rem;
 }
 
@@ -428,6 +436,16 @@
     opacity: 0.82;
     -webkit-line-clamp: 3;
     -webkit-box-orient: vertical;
+}
+
+.acl-card-token-count {
+    margin: auto 0 0;
+    padding-top: 0.45rem;
+    text-align: center;
+    font-size: 0.78rem;
+    line-height: 1.2;
+    color: var(--acl-muted);
+    opacity: 0.72;
 }
 
 .acl-tag-row {
