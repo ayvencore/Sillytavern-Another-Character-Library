@@ -3,6 +3,7 @@ const EXTENSION_TITLE = 'Another Character Library';
 const SETTINGS_KEY = EXTENSION_NAME;
 
 const DEFAULT_SETTINGS = {
+    enabled: true,
     pageSize: 25,
     sortBy: 'az',
     activeTab: 'all',
@@ -42,7 +43,6 @@ let state = {
     selectedCharacterKey: null,
     modalTab: 'overview',
     mounted: false,
-    observer: null,
     renderQueued: false,
     openMenuKey: null,
     searchDraft: '',
@@ -50,8 +50,6 @@ let state = {
     tokenCounts: {},
     tokenCountPending: new Set(),
 };
-
-const nativeLandingShellSelector = '#sheld';
 
 function log(...args) {
     console.debug(`[${EXTENSION_NAME}]`, ...args);
@@ -75,12 +73,9 @@ function ensureSettings(context = getContextSafe()) {
     if (root) {
         root[SETTINGS_KEY] ??= cloneValue(DEFAULT_SETTINGS);
         settings = Object.assign(cloneValue(DEFAULT_SETTINGS), root[SETTINGS_KEY]);
-        root[SETTINGS_KEY].enabled = true;
     } else {
         settings = Object.assign(cloneValue(DEFAULT_SETTINGS), settings);
     }
-    // This extension now always owns the landing-page slot.
-    settings.enabled = true;
     state.searchDraft = settings.search;
     return settings;
 }
@@ -112,6 +107,15 @@ function escapeHtml(value) {
 
 function normalizeString(value) {
     return typeof value === 'string' ? value.trim() : '';
+}
+
+function formatTokenCount(tokenCount) {
+    if (!Number.isFinite(tokenCount)) {
+        return '';
+    }
+
+    const rounded = Math.max(0, Math.round(tokenCount));
+    return `${rounded.toLocaleString()} tokens`;
 }
 
 function stripHtml(value) {
@@ -221,29 +225,6 @@ function getAvatarUrl(character, context) {
     return rawAvatar;
 }
 
-function getCharacterTokenSource(character) {
-    const raw = character?.raw ?? character ?? {};
-    const parts = [
-        normalizeString(raw?.description),
-        normalizeString(raw?.personality),
-        normalizeString(raw?.scenario),
-        normalizeString(raw?.first_mes),
-        normalizeString(raw?.mes_example),
-        normalizeString(raw?.data?.description),
-        normalizeString(raw?.data?.personality),
-        normalizeString(raw?.data?.scenario),
-        normalizeString(raw?.data?.first_mes),
-        normalizeString(raw?.data?.mes_example),
-        normalizeString(raw?.data?.creator_notes),
-        normalizeString(raw?.creatorcomment),
-        normalizeString(raw?.data?.system_prompt),
-        normalizeString(raw?.data?.post_history_instructions),
-        ...(Array.isArray(raw?.data?.alternate_greetings) ? raw.data.alternate_greetings.map(normalizeString) : []),
-    ].filter(Boolean);
-
-    return parts.join('\n\n');
-}
-
 function readOverride(characterKey) {
     return settings.overrides?.[characterKey] ?? {};
 }
@@ -296,9 +277,9 @@ function normalizeCharacters(context) {
             personality,
             avatar: getAvatarUrl(character, context),
             tags,
-            tokenCount: Number(state.tokenCounts?.[key]) || 0,
             favorite: Boolean(settings.favorites?.[key] ?? character?.data?.extensions?.fav ?? character?.fav),
             creatorLink: normalizeString(override.creatorLink ?? getCreatorLink(key, character)),
+            tokenCount: Number.isFinite(state.tokenCounts[key]) ? state.tokenCounts[key] : null,
             addedAt: Math.max(
                 toEpoch(character?.create_date),
                 toEpoch(character?.date_added),
@@ -404,6 +385,10 @@ function hasVisibleNativeLandingHint() {
 }
 
 function shouldShowLandingPage(context) {
+    if (!settings.enabled) {
+        return false;
+    }
+
     const activeChatId = context?.chatId ?? context?.activeChatId ?? context?.chat?.id;
 
     // Mirror the reference landing-page extension: the empty-chat shell should be replaced
@@ -450,47 +435,6 @@ function measureTopInset() {
 
 function syncNativeLandingPageVisibility(isVisible) {
     document.body.classList.toggle('acl-landing-active', isVisible);
-
-    const shell = document.querySelector(nativeLandingShellSelector);
-    if (!(shell instanceof HTMLElement)) {
-        return;
-    }
-
-    if (isVisible) {
-        if (!Object.prototype.hasOwnProperty.call(shell.dataset, 'aclPrevOpacity')) {
-            shell.dataset.aclPrevOpacity = shell.style.opacity || '';
-        }
-        if (!Object.prototype.hasOwnProperty.call(shell.dataset, 'aclPrevPointerEvents')) {
-            shell.dataset.aclPrevPointerEvents = shell.style.pointerEvents || '';
-        }
-        if (!Object.prototype.hasOwnProperty.call(shell.dataset, 'aclPrevVisibility')) {
-            shell.dataset.aclPrevVisibility = shell.style.visibility || '';
-        }
-        shell.style.opacity = '0';
-        shell.style.pointerEvents = 'none';
-        shell.style.visibility = 'hidden';
-    } else {
-        if (Object.prototype.hasOwnProperty.call(shell.dataset, 'aclPrevOpacity')) {
-            shell.style.opacity = shell.dataset.aclPrevOpacity;
-            delete shell.dataset.aclPrevOpacity;
-        } else {
-            shell.style.removeProperty('opacity');
-        }
-
-        if (Object.prototype.hasOwnProperty.call(shell.dataset, 'aclPrevPointerEvents')) {
-            shell.style.pointerEvents = shell.dataset.aclPrevPointerEvents;
-            delete shell.dataset.aclPrevPointerEvents;
-        } else {
-            shell.style.removeProperty('pointer-events');
-        }
-
-        if (Object.prototype.hasOwnProperty.call(shell.dataset, 'aclPrevVisibility')) {
-            shell.style.visibility = shell.dataset.aclPrevVisibility;
-            delete shell.dataset.aclPrevVisibility;
-        } else {
-            shell.style.removeProperty('visibility');
-        }
-    }
 }
 
 function scheduleRender() {
@@ -520,8 +464,20 @@ function ensureRoot() {
     root.addEventListener('keydown', onRootKeyDown);
     root.addEventListener('change', onRootChange);
     root.addEventListener('submit', onRootSubmit);
+    root.addEventListener('scroll', onRootScroll, true);
     document.body.append(root);
     return root;
+}
+
+function onRootScroll(event) {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) {
+        return;
+    }
+
+    if (target.classList.contains('acl-page')) {
+        state.pageScrollTop = target.scrollTop;
+    }
 }
 
 function renderPagination(totalPages) {
@@ -532,34 +488,6 @@ function renderPagination(totalPages) {
             <button type="button" data-action="page-next" ${state.page >= totalPages ? 'disabled' : ''}>Next</button>
         </nav>
     `;
-}
-
-function queueVisibleTokenCounts(characters, context = getContextSafe()) {
-    const tokenizer = context?.getTokenCountAsync;
-    if (typeof tokenizer !== 'function') {
-        return;
-    }
-
-    for (const character of characters) {
-        const tokenSource = getCharacterTokenSource(character);
-        if (!tokenSource || state.tokenCounts[character.key] || state.tokenCountPending.has(character.key)) {
-            continue;
-        }
-
-        state.tokenCountPending.add(character.key);
-        Promise.resolve(tokenizer(tokenSource, 0))
-            .then((count) => {
-                const nextCount = Number(count);
-                state.tokenCounts[character.key] = Number.isFinite(nextCount) ? nextCount : 0;
-            })
-            .catch((error) => {
-                log('Token count calculation failed', error);
-            })
-            .finally(() => {
-                state.tokenCountPending.delete(character.key);
-                scheduleRender();
-            });
-    }
 }
 
 function render() {
@@ -583,20 +511,19 @@ function render() {
 
     const selectedCharacter = getSelectedCharacter();
     const { items, totalPages, totalCharacters } = getPagedCharacters(state.filteredCharacters);
-    queueVisibleTokenCounts(items, context);
 
     root.innerHTML = `
         <div class="acl-backdrop"></div>
         <div class="acl-page">
             <header class="acl-topbar">
-                <form class="acl-topbar-item acl-search-form" data-submit-action="submit-search">
+                <form class="acl-topbar-item acl-topbar-item--search acl-search-form" data-submit-action="submit-search">
                     <label class="acl-topbar-label" for="acl-library-search">Search</label>
                     <div class="acl-topbar-control acl-search-shell">
                         <input id="acl-library-search" type="search" name="search" placeholder="Search names, tags, descriptions..." value="${escapeHtml(state.searchDraft)}">
                         ${state.searchDraft ? '<button type="button" class="acl-search-clear" data-action="clear-search" aria-label="Clear search">&times;</button>' : ''}
                     </div>
                 </form>
-                <div class="acl-topbar-item acl-compact-field">
+                <div class="acl-topbar-item acl-topbar-item--sort acl-compact-field">
                     <label class="acl-topbar-label" for="acl-library-sort">Sort</label>
                     <select id="acl-library-sort" name="sortBy" class="acl-topbar-control">
                         ${SORT_OPTIONS.map((option) => `
@@ -604,7 +531,7 @@ function render() {
                         `).join('')}
                     </select>
                 </div>
-                <div class="acl-topbar-item acl-compact-field">
+                <div class="acl-topbar-item acl-topbar-item--show acl-compact-field">
                     <label class="acl-topbar-label" for="acl-library-page-size">Show</label>
                     <select id="acl-library-page-size" name="pageSize" class="acl-topbar-control">
                         ${PAGE_SIZE_OPTIONS.map((value) => `
@@ -612,11 +539,11 @@ function render() {
                         `).join('')}
                     </select>
                 </div>
-                <div class="acl-topbar-item acl-topbar-meta acl-topbar-meta--results">
+                <div class="acl-topbar-item acl-topbar-item--results acl-topbar-meta acl-topbar-meta--results">
                     <span class="acl-topbar-label">Characters</span>
                     <p class="acl-results acl-topbar-control">${totalCharacters}</p>
                 </div>
-                <div class="acl-topbar-item acl-topbar-tabs acl-topbar-tabs--views">
+                <div class="acl-topbar-item acl-topbar-item--views acl-topbar-tabs acl-topbar-tabs--views">
                     <span class="acl-topbar-label">View</span>
                     <nav class="acl-tabs acl-topbar-control" aria-label="Character views">
                         ${TAB_OPTIONS.map((tab) => `
@@ -656,6 +583,8 @@ function render() {
     if (nextPage instanceof HTMLElement) {
         nextPage.scrollTop = state.pageScrollTop;
     }
+
+    void queueVisibleTokenCounts(items, context);
 }
 
 function renderCard(character) {
@@ -693,11 +622,99 @@ function renderCard(character) {
                             ${hiddenTagCount ? `<span class="acl-tag acl-tag--muted">+${hiddenTagCount}</span>` : ''}
                         </div>
                     ` : ''}
-                    <p class="acl-card-token-count">${character.tokenCount ? `${character.tokenCount} tokens` : 'Counting...'}</p>
+                    <p class="acl-card-token-count" data-token-key="${escapeHtml(character.key)}" aria-live="polite">${formatTokenCount(character.tokenCount)}</p>
                 </div>
             </button>
         </article>
     `;
+}
+
+function getCharacterTokenSource(character, context = getContextSafe()) {
+    const sourceCharacter = character?.raw ?? character;
+
+    if (typeof context?.getCharacterCardFields === 'function') {
+        try {
+            const fields = context.getCharacterCardFields(sourceCharacter);
+            if (fields && typeof fields === 'object') {
+                const fieldText = Object.values(fields)
+                    .flatMap((value) => Array.isArray(value) ? value : [value])
+                    .map((value) => stripHtml(String(value ?? '')))
+                    .filter(Boolean)
+                    .join('\n');
+                if (fieldText) {
+                    return fieldText;
+                }
+            }
+        } catch (error) {
+            log('Could not read native character card fields for token count', error);
+        }
+    }
+
+    const data = sourceCharacter?.data ?? {};
+    return [
+        sourceCharacter?.name,
+        data?.creator_notes,
+        data?.description,
+        data?.personality,
+        data?.char_persona,
+        data?.scenario,
+        data?.mes_example,
+        data?.first_mes,
+        sourceCharacter?.description,
+        sourceCharacter?.personality,
+        sourceCharacter?.first_mes,
+    ]
+        .map((value) => stripHtml(String(value ?? '')))
+        .filter(Boolean)
+        .join('\n');
+}
+
+function updateTokenCountDisplay(characterKey, tokenCount) {
+    state.tokenCounts[characterKey] = tokenCount;
+    const root = rootElement();
+    if (!(root instanceof HTMLElement)) {
+        return;
+    }
+
+    for (const node of root.querySelectorAll('[data-token-key]')) {
+        if (!(node instanceof HTMLElement) || node.dataset.tokenKey !== characterKey) {
+            continue;
+        }
+
+        node.textContent = formatTokenCount(tokenCount);
+    }
+}
+
+async function queueVisibleTokenCounts(characters, context = getContextSafe()) {
+    if (!Array.isArray(characters) || !characters.length || typeof context?.getTokenCountAsync !== 'function') {
+        return;
+    }
+
+    for (const character of characters) {
+        if (!character?.key || Number.isFinite(state.tokenCounts[character.key]) || state.tokenCountPending.has(character.key)) {
+            continue;
+        }
+
+        const tokenSource = getCharacterTokenSource(character, context);
+        if (!tokenSource) {
+            updateTokenCountDisplay(character.key, 0);
+            continue;
+        }
+
+        state.tokenCountPending.add(character.key);
+        Promise.resolve(context.getTokenCountAsync(tokenSource))
+            .then((result) => {
+                const tokenCount = Number(result);
+                updateTokenCountDisplay(character.key, Number.isFinite(tokenCount) ? tokenCount : 0);
+            })
+            .catch((error) => {
+                log('Token count failed', error);
+                updateTokenCountDisplay(character.key, 0);
+            })
+            .finally(() => {
+                state.tokenCountPending.delete(character.key);
+            });
+    }
 }
 
 function renderEditTagChip(tagName, context = getContextSafe()) {
@@ -1211,8 +1228,24 @@ function onRootChange(event) {
 }
 
 function closestActionElement(target) {
-    const element = target instanceof HTMLElement ? target.closest('[data-action]') : null;
-    return element instanceof HTMLFormElement ? null : element;
+    let candidate = null;
+
+    if (target instanceof Element) {
+        candidate = target;
+    } else if (target instanceof Node) {
+        candidate = target.parentElement;
+    }
+
+    if (!(candidate instanceof Element)) {
+        return null;
+    }
+
+    const element = candidate.closest('[data-action]');
+    if (element instanceof HTMLFormElement) {
+        return null;
+    }
+
+    return element instanceof HTMLElement ? element : null;
 }
 
 function getCharacterByActionElement(element) {
@@ -1743,9 +1776,9 @@ async function saveEditForm(form) {
 
         settings.overrides[characterKey] = override;
         settings.creatorLinks[characterKey] = override.creatorLink;
+        upsertBuiltInTags(characterKey, tagNames);
         delete state.tokenCounts[characterKey];
         state.tokenCountPending.delete(characterKey);
-        upsertBuiltInTags(characterKey, tagNames);
         await persistSettings(context);
 
         if (typeof context?.getCharacters === 'function') {
@@ -1762,28 +1795,7 @@ async function saveEditForm(form) {
 }
 
 function observeApp() {
-    if (state.observer) {
-        return;
-    }
-
-    state.observer = new MutationObserver((mutations) => {
-        const root = rootElement();
-        const relevantMutation = mutations.some((mutation) => {
-            if (!root) {
-                return true;
-            }
-            return !root.contains(mutation.target);
-        });
-
-        if (relevantMutation) {
-            scheduleRender();
-        }
-    });
-
-    state.observer.observe(document.body, {
-        childList: true,
-        subtree: true,
-    });
+    return;
 }
 
 function registerGlobalHooks() {
@@ -1808,9 +1820,33 @@ function registerGlobalHooks() {
     document.addEventListener('visibilitychange', scheduleRender);
 }
 
+function updateSettingsPanel(wrapper) {
+    if (!(wrapper instanceof HTMLElement)) {
+        return;
+    }
+
+    const enabledInput = wrapper.querySelector('[data-acl-setting="enabled"]');
+    if (enabledInput instanceof HTMLInputElement) {
+        enabledInput.checked = Boolean(settings.enabled);
+    }
+
+    const status = wrapper.querySelector('[data-role="landing-status"]');
+    if (status instanceof HTMLElement) {
+        status.textContent = settings.enabled
+            ? 'The character library is enabled and will replace the default landing page when no chat is active.'
+            : 'The character library is disabled. SillyTavern will use the default landing page instead.';
+    }
+}
+
 function injectSettingsButton() {
     const host = document.getElementById('extensions_settings2') ?? document.getElementById('extensions_settings');
-    if (!host || host.querySelector(`[data-extension-panel="${EXTENSION_NAME}"]`)) {
+    if (!host) {
+        return;
+    }
+
+    const existing = host.querySelector(`[data-extension-panel="${EXTENSION_NAME}"]`);
+    if (existing instanceof HTMLElement) {
+        updateSettingsPanel(existing);
         return;
     }
 
@@ -1824,12 +1860,38 @@ function injectSettingsButton() {
                 <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
             </div>
             <div class="inline-drawer-content">
-                <p class="acl-settings-copy">This library currently always replaces the default SillyTavern landing page. Cards pull tags from SillyTavern's built-in tag system and prefer Creator's Notes for descriptions.</p>
+                <label class="checkbox_label acl-settings-toggle">
+                    <input type="checkbox" data-acl-setting="enabled" ${settings.enabled ? 'checked' : ''}>
+                    <span>Enable character library landing page</span>
+                </label>
+                <p class="acl-settings-copy" data-role="landing-status"></p>
+                <p class="acl-settings-copy">Cards pull tags from SillyTavern's built-in tag system and prefer Creator's Notes for descriptions.</p>
             </div>
         </div>
     `;
 
+    wrapper.addEventListener('change', async (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLInputElement)) {
+            return;
+        }
+
+        if (target.dataset.aclSetting !== 'enabled') {
+            return;
+        }
+
+        settings.enabled = target.checked;
+        if (!settings.enabled) {
+            state.selectedCharacterKey = null;
+            state.openMenuKey = null;
+        }
+        updateSettingsPanel(wrapper);
+        await persistSettings();
+        scheduleRender();
+    });
+
     host.append(wrapper);
+    updateSettingsPanel(wrapper);
 }
 
 async function init() {
