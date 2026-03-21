@@ -155,6 +155,47 @@ function getTagData(context) {
     return { tagMap, tagsById, tagsList };
 }
 
+function getTagmojisSettings(context = getContextSafe()) {
+    const root = getExtensionSettingsRoot(context);
+    return root?.tagmojis ?? null;
+}
+
+function getTagEmoji(tagId, context = getContextSafe()) {
+    const normalizedId = normalizeString(tagId);
+    if (!normalizedId) {
+        return '';
+    }
+
+    return normalizeString(getTagmojisSettings(context)?.tagMetaById?.[normalizedId]?.emoji);
+}
+
+function renderTagContent(tag) {
+    const emoji = normalizeString(tag?.emoji);
+    const name = normalizeString(tag?.name);
+    const emojiMarkup = emoji
+        ? `<span class="acl-tag-emoji" aria-hidden="true">${escapeHtml(emoji)}</span>`
+        : '';
+    const label = name || emoji || 'Untitled Tag';
+
+    return `
+        ${emojiMarkup}
+        <span class="acl-tag-label">${escapeHtml(label)}</span>
+    `;
+}
+
+function renderTagChip(tag, extraClass = '') {
+    const classes = ['acl-tag'];
+    if (extraClass) {
+        classes.push(extraClass);
+    }
+
+    return `
+        <span class="${classes.join(' ')}" ${tag?.color ? `style="--tag-accent:${escapeHtml(tag.color)}"` : ''}>
+            ${renderTagContent(tag)}
+        </span>
+    `;
+}
+
 function tagSuggestions(context = getContextSafe()) {
     const { tagsList } = getTagData(context);
     return [...new Set(
@@ -255,6 +296,7 @@ function normalizeCharacters(context) {
                     id: String(tag.id),
                     name: normalizeString(tag.name),
                     color: normalizeString(tag.color),
+                    emoji: getTagEmoji(String(tag.id), context),
                 }))
             : [];
         const name = normalizeString(character?.name) || 'Untitled Character';
@@ -618,7 +660,7 @@ function renderCard(character) {
                     <p class="acl-card-description">${escapeHtml(stripHtml(character.description) || 'No creator notes yet.')}</p>
                     ${visibleTags.length ? `
                         <div class="acl-tag-row">
-                            ${visibleTags.map((tag) => `<span class="acl-tag" ${tag.color ? `style="--tag-accent:${escapeHtml(tag.color)}"` : ''}>${escapeHtml(tag.name)}</span>`).join('')}
+                            ${visibleTags.map((tag) => renderTagChip(tag)).join('')}
                             ${hiddenTagCount ? `<span class="acl-tag acl-tag--muted">+${hiddenTagCount}</span>` : ''}
                         </div>
                     ` : ''}
@@ -712,12 +754,25 @@ async function queueVisibleTokenCounts(characters, context = getContextSafe()) {
 function renderEditTagChip(tagName, context = getContextSafe()) {
     const suggestion = getTagData(context).tagsList.find((tag) => normalizeString(tag?.name).toLowerCase() === normalizeString(tagName).toLowerCase());
     const accent = normalizeString(suggestion?.color);
+    const emoji = getTagEmoji(String(suggestion?.id ?? ''), context);
 
     return `
         <span class="acl-tag acl-tag--editable" ${accent ? `style="--tag-accent:${escapeHtml(accent)}"` : ''}>
-            <span>${escapeHtml(tagName)}</span>
+            ${renderTagContent({ name: tagName, emoji })}
             <button type="button" class="acl-tag-remove" data-action="remove-edit-tag" data-tag-name="${escapeHtml(tagName)}" aria-label="Remove ${escapeHtml(tagName)}">&times;</button>
         </span>
+    `;
+}
+
+function renderTagSuggestionChip(tagName, context = getContextSafe()) {
+    const suggestion = getTagData(context).tagsList.find((tag) => normalizeString(tag?.name).toLowerCase() === normalizeString(tagName).toLowerCase());
+    const accent = normalizeString(suggestion?.color);
+    const emoji = getTagEmoji(String(suggestion?.id ?? ''), context);
+
+    return `
+        <button type="button" class="acl-tag-suggestion acl-tag" data-action="choose-edit-tag" data-tag-name="${escapeHtml(tagName)}" ${accent ? `style="--tag-accent:${escapeHtml(accent)}"` : ''}>
+            ${renderTagContent({ name: tagName, emoji })}
+        </button>
     `;
 }
 
@@ -941,7 +996,7 @@ function renderModal(character) {
                                     <h3>Tags</h3>
                                     <div class="acl-tag-row acl-tag-row--compact">
                                         ${character.tags.length
-                                            ? character.tags.map((tag) => `<span class="acl-tag" ${tag.color ? `style="--tag-accent:${escapeHtml(tag.color)}"` : ''}>${escapeHtml(tag.name)}</span>`).join('')
+                                            ? character.tags.map((tag) => renderTagChip(tag)).join('')
                                             : '<span class="acl-tag acl-tag--muted">No tags added yet</span>'}
                                     </div>
                                 </section>
@@ -1102,11 +1157,7 @@ function refreshTagSuggestions(editor, query) {
 
     const suggestions = getTagSuggestionNames(editor, query);
     suggestionList.innerHTML = suggestions.length
-        ? suggestions.map((tagName) => `
-            <button type="button" class="acl-tag-suggestion" data-action="choose-edit-tag" data-tag-name="${escapeHtml(tagName)}">
-                ${escapeHtml(tagName)}
-            </button>
-        `).join('')
+        ? suggestions.map((tagName) => renderTagSuggestionChip(tagName)).join('')
         : '';
     suggestionList.classList.toggle('is-visible', suggestions.length > 0);
     suggestionList.classList.toggle('is-drop-up', suggestions.length > 0 && shouldDropTagSuggestionsUp(editor));

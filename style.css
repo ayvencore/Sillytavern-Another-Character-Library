@@ -527,12 +527,25 @@ body.acl-landing-active #sheld {
 }
 
 .acl-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.34rem;
     padding: 0.16rem 0.46rem;
     border-radius: 999px;
     font-size: 0.7rem;
     line-height: 1.25;
     background: color-mix(in srgb, var(--tag-accent, var(--SmartThemeQuoteColor, #64748b)) 22%, transparent);
     border: 1px solid color-mix(in srgb, var(--tag-accent, var(--SmartThemeQuoteColor, #64748b)) 42%, transparent);
+}
+
+.acl-tag-emoji {
+    flex: 0 0 auto;
+    line-height: 1;
+    font-size: 1.05em;
+}
+
+.acl-tag-label {
+    min-width: 0;
 }
 
 .acl-tag--muted {
@@ -940,6 +953,7 @@ body.acl-landing-active #sheld {
 .acl-tag-suggestion {
     width: 100%;
     text-align: left;
+    justify-content: flex-start;
 }
 
 .acl-modal button.acl-tag-suggestion {
