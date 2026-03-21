@@ -1,6 +1,7 @@
 const EXTENSION_NAME = 'another-character-library';
 const EXTENSION_TITLE = 'Another Character Library';
 const SETTINGS_KEY = EXTENSION_NAME;
+const TAGMOJIS_BRIDGE_KEY = '__tagmojisBridge';
 
 const DEFAULT_SETTINGS = {
     enabled: true,
@@ -155,22 +156,35 @@ function getTagData(context) {
     return { tagMap, tagsById, tagsList };
 }
 
-function getTagmojisSettings(context = getContextSafe()) {
-    const root = getExtensionSettingsRoot(context);
-    return root?.tagmojis ?? null;
+function getTagmojisBridge() {
+    const bridge = globalThis[TAGMOJIS_BRIDGE_KEY];
+    if (!bridge || typeof bridge.getEmojiForTag !== 'function') {
+        return null;
+    }
+
+    if (typeof bridge.isActive === 'function' && !bridge.isActive()) {
+        return null;
+    }
+
+    return bridge;
 }
 
-function getTagEmoji(tagId, context = getContextSafe()) {
+function getTagEmoji(tagId) {
     const normalizedId = normalizeString(tagId);
     if (!normalizedId) {
         return '';
     }
 
-    return normalizeString(getTagmojisSettings(context)?.tagMetaById?.[normalizedId]?.emoji);
+    try {
+        return normalizeString(getTagmojisBridge()?.getEmojiForTag(normalizedId));
+    } catch (error) {
+        log('Tagmojis bridge lookup failed', error);
+        return '';
+    }
 }
 
 function renderTagContent(tag) {
-    const emoji = normalizeString(tag?.emoji);
+    const emoji = getTagEmoji(tag?.id);
     const name = normalizeString(tag?.name);
     const emojiMarkup = emoji
         ? `<span class="acl-tag-emoji" aria-hidden="true">${escapeHtml(emoji)}</span>`
@@ -295,7 +309,6 @@ function normalizeCharacters(context) {
                     id: String(tag.id),
                     name: normalizeString(tag.name),
                     color: normalizeString(tag.color),
-                    emoji: getTagEmoji(String(tag.id), context),
                 }))
             : [];
         const name = normalizeString(character?.name) || 'Untitled Character';
@@ -753,11 +766,10 @@ async function queueVisibleTokenCounts(characters, context = getContextSafe()) {
 function renderEditTagChip(tagName, context = getContextSafe()) {
     const suggestion = getTagData(context).tagsList.find((tag) => normalizeString(tag?.name).toLowerCase() === normalizeString(tagName).toLowerCase());
     const accent = normalizeString(suggestion?.color);
-    const emoji = getTagEmoji(String(suggestion?.id ?? ''), context);
 
     return `
         <span class="acl-tag acl-tag--editable" ${accent ? `style="--tag-accent:${escapeHtml(accent)}"` : ''}>
-            ${renderTagContent({ name: tagName, emoji })}
+            ${renderTagContent({ id: String(suggestion?.id ?? ''), name: tagName })}
             <button type="button" class="acl-tag-remove" data-action="remove-edit-tag" data-tag-name="${escapeHtml(tagName)}" aria-label="Remove ${escapeHtml(tagName)}">&times;</button>
         </span>
     `;
@@ -766,11 +778,10 @@ function renderEditTagChip(tagName, context = getContextSafe()) {
 function renderTagSuggestionChip(tagName, context = getContextSafe()) {
     const suggestion = getTagData(context).tagsList.find((tag) => normalizeString(tag?.name).toLowerCase() === normalizeString(tagName).toLowerCase());
     const accent = normalizeString(suggestion?.color);
-    const emoji = getTagEmoji(String(suggestion?.id ?? ''), context);
 
     return `
         <button type="button" class="acl-tag-suggestion acl-tag" data-action="choose-edit-tag" data-tag-name="${escapeHtml(tagName)}" ${accent ? `style="--tag-accent:${escapeHtml(accent)}"` : ''}>
-            ${renderTagContent({ name: tagName, emoji })}
+            ${renderTagContent({ id: String(suggestion?.id ?? ''), name: tagName })}
         </button>
     `;
 }
